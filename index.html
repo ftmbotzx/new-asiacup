@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Universal Stream Player</title>
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- HLS.js for playing M3U8 streams -->
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <!-- Dash.js for playing MPD streams -->
+    <script src="https://cdn.dashjs.org/latest/dash.all.min.js"></script>
+    <style>
+        /* Custom styles for video player controls */
+        video::-webkit-media-controls-enclosure {
+            border-radius: 0 0 1rem 1rem;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white font-sans flex flex-col items-center justify-center min-h-screen p-4">
+
+    <div class="w-full max-w-4xl space-y-6">
+        <header class="text-center">
+            <h1 class="text-3xl sm:text-4xl font-bold tracking-tight text-cyan-400">Universal Stream Player</h1>
+            <p class="text-gray-400 mt-2">Plays MP4, M3U8 (HLS), and MPD (DASH) links.</p>
+        </header>
+
+        <!-- Video Player Container -->
+        <main class="bg-black rounded-2xl shadow-2xl shadow-cyan-500/10 overflow-hidden">
+            <div class="aspect-video">
+                <video id="videoPlayer" class="w-full h-full" controls autoplay muted playsinline></video>
+            </div>
+             <div id="player-message" class="text-center p-8 text-gray-500">
+                <p>Provide a video URL below to start playing.</p>
+            </div>
+        </main>
+
+        <!-- URL Input Form -->
+        <form id="urlForm" class="w-full flex flex-col sm:flex-row gap-3">
+            <input 
+                type="text" 
+                id="urlInput"
+                placeholder="Enter video stream URL (e.g., .../video.mp4, .m3u8, or .mpd)"
+                class="flex-grow bg-gray-800 border-2 border-gray-700 focus:border-cyan-500 focus:ring-cyan-500 rounded-lg px-4 py-3 text-white placeholder-gray-500 transition-colors duration-300"
+            >
+            <button 
+                type="submit"
+                class="bg-cyan-500 hover:bg-cyan-600 text-gray-900 font-bold px-6 py-3 rounded-lg shadow-lg shadow-cyan-500/20 hover:shadow-cyan-500/40 transition-all duration-300 transform hover:scale-105"
+            >
+                Load Video
+            </button>
+        </form>
+        
+        <!-- Status/Error Message Display -->
+        <div id="status" class="text-center text-gray-400 h-6"></div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const videoElement = document.getElementById('videoPlayer');
+            const urlInput = document.getElementById('urlInput');
+            const urlForm = document.getElementById('urlForm');
+            const statusDiv = document.getElementById('status');
+            const playerMessage = document.getElementById('player-message');
+
+            let hls = null;
+            let dashPlayer = null;
+
+            // This function cleans up previous player instances
+            function destroyPlayers() {
+                if (hls) {
+                    hls.destroy();
+                    hls = null;
+                }
+                if (dashPlayer) {
+                    dashPlayer.reset();
+                    dashPlayer = null;
+                }
+                videoElement.src = '';
+            }
+
+            // Main function to load a video based on URL
+            function loadVideo(url) {
+                if (!url) {
+                    statusDiv.textContent = 'Please provide a valid URL.';
+                    return;
+                }
+                
+                destroyPlayers();
+                videoElement.style.display = 'block';
+                playerMessage.style.display = 'none';
+
+                const urlLowerCase = url.toLowerCase();
+                const extension = url.split('?')[0].split('.').pop();
+
+                try {
+                    // M3U8 (HLS) Stream
+                    if (extension === 'm3u8') {
+                        statusDiv.textContent = 'Loading HLS stream (m3u8)...';
+                        if (Hls.isSupported()) {
+                            hls = new Hls();
+                            hls.loadSource(url);
+                            hls.attachMedia(videoElement);
+                            hls.on(Hls.Events.ERROR, (event, data) => {
+                                if (data.fatal) {
+                                    console.error('HLS fatal error:', data);
+                                    statusDiv.textContent = `Error loading HLS stream: ${data.details}`;
+                                }
+                            });
+                        } else if (videoElement.canPlayType('application/vnd.apple.mpegurl')) {
+                            // Native HLS support (e.g., Safari)
+                            videoElement.src = url;
+                        } else {
+                            statusDiv.textContent = 'HLS playback is not supported on this browser.';
+                        }
+                    } 
+                    // MPD (DASH) Stream
+                    else if (extension === 'mpd') {
+                        statusDiv.textContent = 'Loading DASH stream (mpd)...';
+                        dashPlayer = dashjs.MediaPlayer().create();
+                        dashPlayer.initialize(videoElement, url, true);
+                        dashPlayer.on(dashjs.MediaPlayer.events.ERROR, (e) => {
+                             console.error('Dash.js error:', e);
+                             statusDiv.textContent = `Error loading DASH stream: ${e.error.message}`;
+                        });
+                    } 
+                    // MP4 or other direct video formats
+                    else {
+                        statusDiv.textContent = 'Loading MP4 video...';
+                        videoElement.src = url;
+                        videoElement.addEventListener('error', () => {
+                           statusDiv.textContent = 'Error: Could not play the specified video file.';
+                        });
+                    }
+                } catch (error) {
+                    console.error("Error loading video:", error);
+                    statusDiv.textContent = "An unexpected error occurred while trying to load the video.";
+                    videoElement.style.display = 'none';
+                    playerMessage.style.display = 'block';
+                }
+                 videoElement.addEventListener('play', () => {
+                     statusDiv.textContent = `Playing: ${url.substring(0, 100)}${url.length > 100 ? '...' : ''}`;
+                 });
+            }
+
+            // Handle form submission
+            urlForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                const newUrl = urlInput.value.trim();
+                // Update the URL query parameter to reflect the new video
+                const newSearch = newUrl ? `?url=${encodeURIComponent(newUrl)}` : '';
+                // Using history.pushState to avoid a full page reload
+                if (window.location.search !== newSearch) {
+                    window.history.pushState({ path: newSearch }, '', newSearch);
+                }
+                loadVideo(newUrl);
+            });
+            
+            // Listen for browser back/forward navigation
+            window.addEventListener('popstate', () => {
+                const params = new URLSearchParams(window.location.search);
+                const videoUrl = params.get('url');
+                urlInput.value = videoUrl || '';
+                loadVideo(videoUrl);
+            });
+
+            // Initial load from URL parameter on page load
+            const initialParams = new URLSearchParams(window.location.search);
+            const initialVideoUrl = initialParams.get('url');
+
+            if (initialVideoUrl) {
+                urlInput.value = initialVideoUrl;
+                loadVideo(initialVideoUrl);
+            } else {
+                videoElement.style.display = 'none';
+                playerMessage.style.display = 'block';
+            }
+        });
+    </script>
+</body>
+</html>
+
