@@ -36,19 +36,25 @@
         </main>
 
         <!-- URL Input Form -->
-        <form id="urlForm" class="w-full flex flex-col sm:flex-row gap-3">
-            <input 
-                type="text" 
-                id="urlInput"
-                placeholder="Enter video stream URL (e.g., .../video.mp4, .m3u8, or .mpd)"
-                class="flex-grow bg-gray-800 border-2 border-gray-700 focus:border-cyan-500 focus:ring-cyan-500 rounded-lg px-4 py-3 text-white placeholder-gray-500 transition-colors duration-300"
-            >
-            <button 
-                type="submit"
-                class="bg-cyan-500 hover:bg-cyan-600 text-gray-900 font-bold px-6 py-3 rounded-lg shadow-lg shadow-cyan-500/20 hover:shadow-cyan-500/40 transition-all duration-300 transform hover:scale-105"
-            >
-                Load Video
-            </button>
+        <form id="urlForm" class="w-full space-y-3">
+            <div class="flex flex-col sm:flex-row gap-3">
+                <input 
+                    type="text" 
+                    id="urlInput"
+                    placeholder="Enter video stream URL (e.g., .../video.mp4, .m3u8, or .mpd)"
+                    class="flex-grow bg-gray-800 border-2 border-gray-700 focus:border-cyan-500 focus:ring-cyan-500 rounded-lg px-4 py-3 text-white placeholder-gray-500 transition-colors duration-300"
+                >
+                <button 
+                    type="submit"
+                    class="bg-cyan-500 hover:bg-cyan-600 text-gray-900 font-bold px-6 py-3 rounded-lg shadow-lg shadow-cyan-500/20 hover:shadow-cyan-500/40 transition-all duration-300 transform hover:scale-105"
+                >
+                    Load Video
+                </button>
+            </div>
+            <div class="flex items-center justify-center sm:justify-start pt-2">
+                <input type="checkbox" id="corsProxy" name="corsProxy" class="w-4 h-4 text-cyan-600 bg-gray-700 border-gray-600 rounded focus:ring-cyan-500 focus:ring-offset-gray-900">
+                <label for="corsProxy" class="ml-2 text-sm font-medium text-gray-400">Use CORS Proxy <span class="text-gray-500">(for HLS `manifestLoadError`)</span></label>
+            </div>
         </form>
         
         <!-- Status/Error Message Display -->
@@ -62,6 +68,7 @@
             const urlForm = document.getElementById('urlForm');
             const statusDiv = document.getElementById('status');
             const playerMessage = document.getElementById('player-message');
+            const corsProxyCheckbox = document.getElementById('corsProxy');
 
             let hls = null;
             let dashPlayer = null;
@@ -90,16 +97,23 @@
                 videoElement.style.display = 'block';
                 playerMessage.style.display = 'none';
 
-                const urlLowerCase = url.toLowerCase();
-                const extension = url.split('?')[0].split('.').pop();
+                const extension = url.split('?')[0].split('.').pop().toLowerCase();
+                let finalUrl = url;
 
                 try {
                     // M3U8 (HLS) Stream
                     if (extension === 'm3u8') {
-                        statusDiv.textContent = 'Loading HLS stream (m3u8)...';
+                        // If the proxy checkbox is checked, prepend the proxy URL
+                        if (corsProxyCheckbox.checked) {
+                            finalUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
+                            statusDiv.textContent = 'Loading HLS via CORS Proxy...';
+                        } else {
+                            statusDiv.textContent = 'Loading HLS stream (m3u8)...';
+                        }
+                        
                         if (Hls.isSupported()) {
                             hls = new Hls();
-                            hls.loadSource(url);
+                            hls.loadSource(finalUrl);
                             hls.attachMedia(videoElement);
                             hls.on(Hls.Events.ERROR, (event, data) => {
                                 if (data.fatal) {
@@ -109,7 +123,7 @@
                             });
                         } else if (videoElement.canPlayType('application/vnd.apple.mpegurl')) {
                             // Native HLS support (e.g., Safari)
-                            videoElement.src = url;
+                            videoElement.src = finalUrl;
                         } else {
                             statusDiv.textContent = 'HLS playback is not supported on this browser.';
                         }
@@ -118,18 +132,19 @@
                     else if (extension === 'mpd') {
                         statusDiv.textContent = 'Loading DASH stream (mpd)...';
                         dashPlayer = dashjs.MediaPlayer().create();
-                        dashPlayer.initialize(videoElement, url, true);
+                        dashPlayer.initialize(videoElement, finalUrl, true);
                         dashPlayer.on(dashjs.MediaPlayer.events.ERROR, (e) => {
                              console.error('Dash.js error:', e);
-                             statusDiv.textContent = `Error loading DASH stream: ${e.error.message}`;
+                             statusDiv.textContent = `Error loading DASH stream: ${e.error ? e.error.message : 'Unknown Dash Error'}`;
                         });
                     } 
                     // MP4 or other direct video formats
                     else {
-                        statusDiv.textContent = 'Loading MP4 video...';
-                        videoElement.src = url;
-                        videoElement.addEventListener('error', () => {
+                        statusDiv.textContent = 'Loading direct video...';
+                        videoElement.src = finalUrl;
+                        videoElement.addEventListener('error', (e) => {
                            statusDiv.textContent = 'Error: Could not play the specified video file.';
+                           console.error('Video element error:', e);
                         });
                     }
                 } catch (error) {
@@ -147,9 +162,13 @@
             urlForm.addEventListener('submit', (e) => {
                 e.preventDefault();
                 const newUrl = urlInput.value.trim();
-                // Update the URL query parameter to reflect the new video
-                const newSearch = newUrl ? `?url=${encodeURIComponent(newUrl)}` : '';
-                // Using history.pushState to avoid a full page reload
+                const useProxy = corsProxyCheckbox.checked;
+                // Update the URL query parameter to reflect the new video and proxy setting
+                const params = new URLSearchParams();
+                if (newUrl) params.set('url', newUrl);
+                if (useProxy && newUrl.includes('.m3u8')) params.set('proxy', 'true');
+                const newSearch = params.toString() ? `?${params.toString()}` : '';
+
                 if (window.location.search !== newSearch) {
                     window.history.pushState({ path: newSearch }, '', newSearch);
                 }
@@ -160,16 +179,20 @@
             window.addEventListener('popstate', () => {
                 const params = new URLSearchParams(window.location.search);
                 const videoUrl = params.get('url');
+                const useProxy = params.get('proxy') === 'true';
                 urlInput.value = videoUrl || '';
+                corsProxyCheckbox.checked = useProxy;
                 loadVideo(videoUrl);
             });
 
             // Initial load from URL parameter on page load
             const initialParams = new URLSearchParams(window.location.search);
             const initialVideoUrl = initialParams.get('url');
+            const initialProxy = initialParams.get('proxy') === 'true';
 
             if (initialVideoUrl) {
                 urlInput.value = initialVideoUrl;
+                corsProxyCheckbox.checked = initialProxy;
                 loadVideo(initialVideoUrl);
             } else {
                 videoElement.style.display = 'none';
@@ -179,4 +202,5 @@
     </script>
 </body>
 </html>
+
 
